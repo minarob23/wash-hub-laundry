@@ -1,0 +1,59 @@
+# ملفات مؤقتة
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+
+# قاعدة البيانات
+*.db
+*.sqlite
+*.sqlite3
+
+# النسخ الاحتياطية
+backups/
+*.backup
+
+# ملفات السجلات
+*.log
+logs/
+
+# ملفات IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ملفات النظام
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ملفات البناء
+build/
+dist/
+*.spec
+*.exe
+
+# البيئة الافتراضية
+venv/
+env/
+ENV/
+virtualenv/
+
+# ملفات التكوين الشخصية
+config_local.py
+secrets.py
+
+# ملفات اختبار
+test.db
+test_*.py
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ملفات مؤقتة
+temp/
+tmp/
+*.tmp
