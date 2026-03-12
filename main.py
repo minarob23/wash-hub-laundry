@@ -814,7 +814,12 @@ class LaundrySystem(ctk.CTk):
         self.customer_entry.insert(0, "0000000000")
         self.customer_name_entry.delete(0, 'end')
         self.customer_name_entry.insert(0, "Cash Customer")
-        messagebox.showinfo("طلب جديد", "تم بدء طلب جديد")
+        self.customer_address_entry.delete(0, 'end')
+        self.customer_address_entry.insert(0, "Cash Customer address1")
+        self.trn_entry.delete(0, 'end')
+        self.trn_entry.insert(0, "TRN(VAT-TIN)")
+        self.remark_entry.delete(0, 'end')
+        self.select_status(1)  # إعادة تعيين الحالة إلى Hang
     
     def clear_cart(self):
         """مسح السلة"""
@@ -858,6 +863,12 @@ class LaundrySystem(ctk.CTk):
             vat = subtotal * 0.05  # 5% VAT
             total = subtotal - discount + vat
             
+            # تحديد الحالة من status_option (0=Urgent, 1=Hang, 2=Fold)
+            status_val = self.status_option.get()
+            status_text = "Urgent" if status_val == 0 else "Hang" if status_val == 1 else "Fold"
+            is_urgent = 1 if status_val == 0 else 0
+            is_fold = 1 if status_val == 2 else 0
+            
             # إدراج الفاتورة
             self.cursor.execute('''
                 INSERT INTO invoices (invoice_number, customer_id, date, delivery_date,
@@ -869,8 +880,7 @@ class LaundrySystem(ctk.CTk):
                  self.delivery_date_entry.get(), self.delivery_time_entry.get(),
                  self.service_type.get(), self.customer_type.get(),
                  self.sales_man.get(), self.depot.get(), self.delivery_var.get(),
-                 "Hang" if self.hang_var.get() else "Fold",
-                 self.urgent_var.get(), self.fold_var.get(), self.tag_var.get(),
+                 status_text, is_urgent, is_fold, self.tag_var.get(),
                  self.remark_entry.get(), subtotal, discount, vat, total))
             
             invoice_id = self.cursor.lastrowid
@@ -885,13 +895,247 @@ class LaundrySystem(ctk.CTk):
                      item['price'], item['price'] * item['quantity']))
             
             self.conn.commit()
-            messagebox.showinfo("نجاح", f"تم حفظ الفاتورة رقم {invoice_number} بنجاح!")
+            
+            # سؤال المستخدم عن الطباعة
+            if messagebox.askyesno("نجاح", f"تم حفظ الفاتورة رقم {invoice_number} بنجاح!\n\nهل تريد طباعة الفاتورة؟"):
+                self.print_invoice_by_id(invoice_id)
             
             # بدء فاتورة جديدة
             self.new_order()
             
         except Exception as e:
             messagebox.showerror("خطأ", f"حدث خطأ أثناء حفظ الفاتورة: {str(e)}")
+
+    def print_invoice_by_id(self, invoice_id):
+        """طباعة فاتورة موجودة بالـ ID"""
+        try:
+            # جلب بيانات الفاتورة
+            self.cursor.execute('''
+                SELECT i.*, c.name, c.phone, c.address, c.trn_vat
+                FROM invoices i
+                LEFT JOIN customers c ON i.customer_id = c.id
+                WHERE i.id = ?
+            ''', (invoice_id,))
+            inv = self.cursor.fetchone()
+            if not inv:
+                return
+            
+            # جلب تفاصيل الفاتورة
+            self.cursor.execute('SELECT * FROM invoice_items WHERE invoice_id = ?', (invoice_id,))
+            items = self.cursor.fetchall()
+            
+            self._generate_and_print_receipt(inv, items)
+        except Exception as e:
+            messagebox.showerror("خطأ", f"حدث خطأ أثناء طباعة الفاتورة: {str(e)}")
+
+    def print_current_invoice(self):
+        """طباعة الفاتورة الحالية في السلة (قبل الحفظ)"""
+        if not self.cart_items:
+            messagebox.showwarning("تحذير", "السلة فارغة! أضف منتجات أولاً.")
+            return
+        
+        # بناء بيانات مؤقتة للطباعة
+        invoice_number = self.invoice_number_entry.get()
+        customer_name = self.customer_name_entry.get()
+        customer_phone = self.customer_entry.get()
+        customer_address = self.customer_address_entry.get()
+        trn_vat = self.trn_entry.get()
+        date_val = self.date_entry.get()
+        delivery_date = self.delivery_date_entry.get()
+        delivery_time = self.delivery_time_entry.get()
+        service_type = self.service_type.get()
+        remark = self.remark_entry.get()
+        
+        subtotal = sum(item['price'] * item['quantity'] for item in self.cart_items)
+        discount = 0
+        vat = subtotal * 0.05
+        total = subtotal - discount + vat
+        
+        # توليد HTML للفاتورة وطباعتها
+        items_rows = ""
+        for idx, item in enumerate(self.cart_items, 1):
+            item_total = item['price'] * item['quantity']
+            items_rows += f"""
+            <tr>
+                <td>{idx}</td>
+                <td>{item['name']}</td>
+                <td>{item['quantity']}</td>
+                <td>{item['price']:.2f}</td>
+                <td>{item_total:.2f}</td>
+            </tr>"""
+        
+        html = self._build_receipt_html(
+            invoice_number, customer_name, customer_phone, customer_address,
+            trn_vat, date_val, delivery_date, delivery_time, service_type,
+            remark, items_rows, subtotal, discount, vat, total
+        )
+        self._open_print_window(html)
+
+    def _generate_and_print_receipt(self, inv, items):
+        """توليد وطباعة إيصال الدفع"""
+        # inv columns: id, invoice_number, customer_id, date, delivery_date, delivery_time,
+        #              service_type, customer_type, sales_man, depot, delivery_method,
+        #              status, is_urgent, is_fold, is_tag, remark, subtotal, discount,
+        #              vat, total, created_at, name, phone, address, trn_vat
+        invoice_number = inv[1]
+        date_val       = inv[3]
+        delivery_date  = inv[4]
+        delivery_time  = inv[5]
+        service_type   = inv[6]
+        remark         = inv[15] or ""
+        subtotal       = inv[16]
+        discount       = inv[17]
+        vat            = inv[18]
+        total          = inv[19]
+        customer_name  = inv[21] or "Cash Customer"
+        customer_phone = inv[22] or ""
+        customer_address = inv[23] or ""
+        trn_vat        = inv[24] or ""
+        
+        items_rows = ""
+        for idx, item in enumerate(items, 1):
+            # item: id, invoice_id, product_id, product_name, quantity, price, total
+            items_rows += f"""
+            <tr>
+                <td>{idx}</td>
+                <td>{item[3]}</td>
+                <td>{item[4]}</td>
+                <td>{item[5]:.2f}</td>
+                <td>{item[6]:.2f}</td>
+            </tr>"""
+        
+        html = self._build_receipt_html(
+            invoice_number, customer_name, customer_phone, customer_address,
+            trn_vat, date_val, delivery_date, delivery_time, service_type,
+            remark, items_rows, subtotal, discount, vat, total
+        )
+        self._open_print_window(html)
+
+    def _build_receipt_html(self, invoice_number, customer_name, customer_phone,
+                             customer_address, trn_vat, date_val, delivery_date,
+                             delivery_time, service_type, remark, items_rows,
+                             subtotal, discount, vat, total):
+        """بناء HTML الفاتورة"""
+        return f"""<!DOCTYPE html>
+<html dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Invoice #{invoice_number}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: Arial, sans-serif; font-size: 13px; color: #222; padding: 20px; }}
+  .header {{ text-align: center; border-bottom: 2px solid #2b5797; padding-bottom: 10px; margin-bottom: 15px; }}
+  .header h1 {{ color: #2b5797; font-size: 22px; }}
+  .header p {{ color: #555; font-size: 12px; }}
+  .info-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 15px; }}
+  .info-block {{ background: #f5f8ff; border: 1px solid #d0daf0; border-radius: 6px; padding: 8px 12px; }}
+  .info-block label {{ font-size: 11px; color: #777; display: block; }}
+  .info-block span {{ font-weight: bold; color: #222; }}
+  table {{ width: 100%; border-collapse: collapse; margin-bottom: 15px; }}
+  th {{ background: #2b5797; color: white; padding: 8px; text-align: left; font-size: 12px; }}
+  td {{ padding: 7px 8px; border-bottom: 1px solid #eee; }}
+  tr:nth-child(even) {{ background: #f9f9f9; }}
+  .totals {{ width: 300px; margin-left: auto; border: 1px solid #d0daf0; border-radius: 6px; overflow: hidden; }}
+  .totals tr td:first-child {{ color: #555; padding: 6px 12px; }}
+  .totals tr td:last-child {{ text-align: right; font-weight: bold; padding: 6px 12px; }}
+  .totals .grand-total td {{ background: #2b5797; color: white; font-size: 15px; }}
+  .footer {{ text-align: center; margin-top: 20px; color: #777; font-size: 11px; border-top: 1px solid #ddd; padding-top: 10px; }}
+  @media print {{
+    body {{ padding: 5px; }}
+    .no-print {{ display: none; }}
+  }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🧺 WASH HUB LAUNDRY</h1>
+  <p>AP SOFT System | Professional Laundry Management</p>
+</div>
+
+<div class="info-grid">
+  <div class="info-block">
+    <label>Invoice No.</label>
+    <span>#{invoice_number}</span>
+  </div>
+  <div class="info-block">
+    <label>Date</label>
+    <span>{date_val}</span>
+  </div>
+  <div class="info-block">
+    <label>Customer Name</label>
+    <span>{customer_name}</span>
+  </div>
+  <div class="info-block">
+    <label>Phone</label>
+    <span>{customer_phone}</span>
+  </div>
+  <div class="info-block">
+    <label>Address</label>
+    <span>{customer_address}</span>
+  </div>
+  <div class="info-block">
+    <label>TRN / VAT</label>
+    <span>{trn_vat if trn_vat and trn_vat != "TRN(VAT-TIN)" else "-"}</span>
+  </div>
+  <div class="info-block">
+    <label>Service Type</label>
+    <span>{service_type}</span>
+  </div>
+  <div class="info-block">
+    <label>Delivery Date</label>
+    <span>{delivery_date} {delivery_time}</span>
+  </div>
+</div>
+
+{"<div style='background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:12px;'><b>Remark:</b> " + remark + "</div>" if remark else ""}
+
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Item</th>
+      <th>Qty</th>
+      <th>Price (AED)</th>
+      <th>Total (AED)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {items_rows}
+  </tbody>
+</table>
+
+<table class="totals">
+  <tr><td>Sub Total</td><td>{subtotal:.2f} AED</td></tr>
+  <tr><td>Discount</td><td>{discount:.2f} AED</td></tr>
+  <tr><td>VAT (5%)</td><td>{vat:.2f} AED</td></tr>
+  <tr class="grand-total"><td><b>TOTAL</b></td><td><b>{total:.2f} AED</b></td></tr>
+</table>
+
+<div class="footer">
+  <p>Thank you for choosing Wash Hub Laundry!</p>
+  <p>Generated by AP SOFT System</p>
+</div>
+
+<div class="no-print" style="text-align:center;margin-top:20px;">
+  <button onclick="window.print()" style="padding:10px 30px;background:#2b5797;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;">🖨 Print</button>
+</div>
+</body>
+</html>"""
+
+    def _open_print_window(self, html):
+        """حفظ HTML وفتحه في المتصفح للطباعة"""
+        import tempfile
+        import webbrowser
+        
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.html', delete=False,
+            encoding='utf-8', prefix='laundry_invoice_'
+        ) as f:
+            f.write(html)
+            temp_path = f.name
+        
+        webbrowser.open(f'file:///{temp_path.replace(chr(92), "/")}')
+        messagebox.showinfo("طباعة", "تم فتح الفاتورة في المتصفح.\nاضغط Ctrl+P أو زر Print لطباعتها.")
     
     def update_cart_display(self):
         """تحديث عرض السلة"""
@@ -2193,10 +2437,8 @@ class MenuDialog(ctk.CTkToplevel):
     
     def print_invoice(self):
         """طباعة الفاتورة الحالية"""
-        if not self.parent.cart_items:
-            messagebox.showwarning("تحذير", "لا توجد فاتورة للطباعة")
-            return
-        messagebox.showinfo("طباعة", "سيتم طباعة الفاتورة...")
+        self.destroy()
+        self.parent.print_current_invoice()
     
     def track_order(self):
         """تتبع الطلب"""
