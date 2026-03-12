@@ -257,8 +257,7 @@ in the Software without restriction...
 
 ## 📞 Contact
 
-- 📧 Email: support@example.com
-- 💬 Support: [Open a ticket](../../issues/new)
+-  Support: [Open a ticket](../../issues/new)
 - 🌐 Website: Coming soon
 
 ---
